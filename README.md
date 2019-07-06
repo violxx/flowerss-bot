@@ -22,7 +22,7 @@ DEMO: https://t.me/rssflowbot
 ### Docker 部署
 
 ```shell
-docker run -d indes/flowerss-bot -k <bot token> -tk <telegraph token 可省略>
+docker run -d indes/flowerss-bot -b <bot token> -t <telegraph token 可省略> -i <update interval 可省略>
 ```
 
 ### 下载二进制
