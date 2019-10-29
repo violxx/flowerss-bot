@@ -21,7 +21,31 @@ var (
 	socks5Proxy                          = config.Socks5
 	UserState   map[int64]fsm.UserStatus = make(map[int64]fsm.UserStatus)
 
-	B *tb.Bot
+	B              *tb.Bot
+	botSettingTmpl = `
+订阅<b>设置</b>
+[id] {{ .sub.ID}}
+[标题] {{ .source.Title }}
+[Link] {{.source.Link}}
+[抓取更新] {{if ge .source.ErrorCount 100}}暂停{{else if lt .source.ErrorCount 100}}抓取中{{end}}
+[通知] {{if eq .sub.EnableNotification 0}}关闭{{else if eq .sub.EnableNotification 1}}开启{{end}}
+[Telegraph] {{if eq .sub.EnableTelegraph 0}}关闭{{else if eq .sub.EnableTelegraph 1}}开启{{end}}
+`
+)
+
+var (
+	toggleNoticeKey = tb.InlineButton{
+		Unique: "toggle_notice",
+		Text:   "切换通知",
+	}
+	toggleTelegraphKey = tb.InlineButton{
+		Unique: "toggle_telegraph",
+		Text:   "切换 Telegraph",
+	}
+	toggleEnabledKey = tb.InlineButton{
+		Unique: "toggle_enabled",
+		Text:   "抓取开关",
+	}
 )
 
 func init() {
@@ -74,6 +98,75 @@ func init() {
 
 }
 
+func toggleCtrlButtons(c *tb.Callback, action string) {
+	msg := strings.Split(c.Message.Text, "\n")
+	subID, err := strconv.Atoi(strings.Split(msg[1], " ")[1])
+	if err != nil {
+		_ = B.Respond(c, &tb.CallbackResponse{
+			Text: "error",
+		})
+		return
+	}
+	sub, err := model.GetSubscribeByID(int(subID))
+	if sub == nil || err != nil {
+		_ = B.Respond(c, &tb.CallbackResponse{
+			Text: "error",
+		})
+		return
+	}
+
+	source, _ := model.GetSourceById(int(sub.SourceID))
+	t := template.New("setting template")
+	_, _ = t.Parse(botSettingTmpl)
+	feedSettingKeys := [][]tb.InlineButton{}
+
+	switch action {
+	case "toggleNoticeKey":
+		err = sub.ToggleNotification()
+	case "toggleTelegraphKey":
+		err = sub.ToggleTelegraph()
+	case "toggleEnabledKey":
+		err = source.ToggleEnabled()
+	}
+
+	if err != nil {
+		_ = B.Respond(c, &tb.CallbackResponse{
+			Text: "error",
+		})
+		return
+	}
+
+	sub.Save()
+
+	text := new(bytes.Buffer)
+	if sub.EnableNotification == 1 {
+		toggleNoticeKey.Text = "关闭通知"
+	} else {
+		toggleNoticeKey.Text = "开启通知"
+	}
+	if sub.EnableTelegraph == 1 {
+		toggleTelegraphKey.Text = "关闭 Telegraph 转码"
+	} else {
+		toggleTelegraphKey.Text = "开启 Telegraph 转码"
+	}
+	if source.ErrorCount >= 100 {
+		toggleEnabledKey.Text = "重启更新"
+	} else {
+		toggleEnabledKey.Text = "暂停更新"
+	}
+
+	feedSettingKeys = append(feedSettingKeys, []tb.InlineButton{toggleEnabledKey, toggleNoticeKey, toggleTelegraphKey})
+	_ = t.Execute(text, map[string]interface{}{"source": source, "sub": sub})
+	_ = B.Respond(c, &tb.CallbackResponse{
+		Text: "修改成功",
+	})
+	_, _ = B.Edit(c.Message, text.String(), &tb.SendOptions{
+		ParseMode: tb.ModeHTML,
+	}, &tb.ReplyMarkup{
+		InlineKeyboard: feedSettingKeys,
+	})
+}
+
 //Start run bot
 func Start() {
 	makeHandle()
@@ -81,137 +174,17 @@ func Start() {
 }
 
 func makeHandle() {
-	toggleNoticeKey := tb.InlineButton{
-		Unique: "toggle_notice",
-		Text:   "切换通知",
-	}
-	toggleTelegraphKey := tb.InlineButton{
-		Unique: "toggle_telegraph",
-		Text:   "切换 Telegraph",
-	}
 
 	B.Handle(&toggleNoticeKey, func(c *tb.Callback) {
-
-		msg := strings.Split(c.Message.Text, "\n")
-		subID, err := strconv.Atoi(strings.Split(msg[1], " ")[1])
-		if err != nil {
-			_ = B.Respond(c, &tb.CallbackResponse{
-				Text: "error",
-			})
-			return
-		}
-		sub, err := model.GetSubscribeByID(int(subID))
-		if sub == nil || err != nil {
-			_ = B.Respond(c, &tb.CallbackResponse{
-				Text: "error",
-			})
-			return
-		}
-
-		source, _ := model.GetSourceById(int(sub.SourceID))
-		t := template.New("setting template")
-		_, _ = t.Parse(`
-订阅<b>设置</b>
-[id] {{ .sub.ID}}
-[标题] {{ .source.Title }}
-[Link] {{.source.Link}}
-[通知] {{if eq .sub.EnableNotification 0}}关闭{{else if eq .sub.EnableNotification 1}}开启{{end}}
-[Telegraph] {{if eq .sub.EnableTelegraph 0}}关闭{{else if eq .sub.EnableTelegraph 1}}开启{{end}}
-`)
-		feedSettingKeys := [][]tb.InlineButton{}
-
-		err = sub.ToggleNotification()
-		if err != nil {
-			_ = B.Respond(c, &tb.CallbackResponse{
-				Text: "error",
-			})
-			return
-		}
-		sub.Save()
-		text := new(bytes.Buffer)
-		if sub.EnableNotification == 1 {
-			toggleNoticeKey.Text = "关闭通知"
-		} else {
-			toggleNoticeKey.Text = "开启通知"
-
-		}
-		if sub.EnableTelegraph == 1 {
-			toggleTelegraphKey.Text = "关闭 Telegraph 转码"
-		} else {
-			toggleTelegraphKey.Text = "开启 Telegraph 转码"
-		}
-		feedSettingKeys = append(feedSettingKeys, []tb.InlineButton{toggleNoticeKey, toggleTelegraphKey})
-		_ = t.Execute(text, map[string]interface{}{"source": source, "sub": sub})
-		_ = B.Respond(c, &tb.CallbackResponse{
-			Text: "修改成功",
-		})
-		_, _ = B.Edit(c.Message, text.String(), &tb.SendOptions{
-			ParseMode: tb.ModeHTML,
-		}, &tb.ReplyMarkup{
-			InlineKeyboard: feedSettingKeys,
-		})
+		toggleCtrlButtons(c, "toggleNoticeKey")
 	})
 
 	B.Handle(&toggleTelegraphKey, func(c *tb.Callback) {
+		toggleCtrlButtons(c, "toggleTelegraphKey")
+	})
 
-		msg := strings.Split(c.Message.Text, "\n")
-		subID, err := strconv.Atoi(strings.Split(msg[1], " ")[1])
-		if err != nil {
-			_ = B.Respond(c, &tb.CallbackResponse{
-				Text: "error",
-			})
-			return
-		}
-		sub, err := model.GetSubscribeByID(int(subID))
-		if sub == nil || err != nil {
-			_ = B.Respond(c, &tb.CallbackResponse{
-				Text: "error",
-			})
-			return
-		}
-
-		source, _ := model.GetSourceById(int(sub.SourceID))
-		t := template.New("setting template")
-		_, _ = t.Parse(`
-订阅<b>设置</b>
-[id] {{ .sub.ID}}
-[标题] {{ .source.Title }}
-[Link] {{.source.Link}}
-[通知] {{if eq .sub.EnableNotification 0}}关闭{{else if eq .sub.EnableNotification 1}}开启{{end}}
-[Telegraph] {{if eq .sub.EnableTelegraph 0}}关闭{{else if eq .sub.EnableTelegraph 1}}开启{{end}}
-`)
-		feedSettingKeys := [][]tb.InlineButton{}
-
-		err = sub.ToggleTelegraph()
-		if err != nil {
-			_ = B.Respond(c, &tb.CallbackResponse{
-				Text: "error",
-			})
-			return
-		}
-		sub.Save()
-		text := new(bytes.Buffer)
-		if sub.EnableNotification == 1 {
-			toggleNoticeKey.Text = "关闭通知"
-		} else {
-			toggleNoticeKey.Text = "开启通知"
-
-		}
-		if sub.EnableTelegraph == 1 {
-			toggleTelegraphKey.Text = "关闭 Telegraph 转码"
-		} else {
-			toggleTelegraphKey.Text = "开启 Telegraph 转码"
-		}
-		feedSettingKeys = append(feedSettingKeys, []tb.InlineButton{toggleNoticeKey, toggleTelegraphKey})
-		_ = t.Execute(text, map[string]interface{}{"source": source, "sub": sub})
-		_ = B.Respond(c, &tb.CallbackResponse{
-			Text: "修改成功",
-		})
-		_, _ = B.Edit(c.Message, text.String(), &tb.SendOptions{
-			ParseMode: tb.ModeHTML,
-		}, &tb.ReplyMarkup{
-			InlineKeyboard: feedSettingKeys,
-		})
+	B.Handle(&toggleEnabledKey, func(c *tb.Callback) {
+		toggleCtrlButtons(c, "toggleEnabledKey")
 	})
 
 	B.Handle("/start", func(m *tb.Message) {
@@ -221,8 +194,33 @@ func makeHandle() {
 	})
 
 	B.Handle("/export", func(m *tb.Message) {
+		sourceList, err := model.GetSourcesByUserID(m.Chat.ID)
 
-		_, _ = B.Send(m.Chat, fmt.Sprintf("export"))
+		if err != nil {
+			log.Println(err.Error())
+			_, _ = B.Send(m.Chat, fmt.Sprintf("导出失败"))
+			return
+		}
+
+		if len(sourceList) == 0 {
+			_, _ = B.Send(m.Chat, fmt.Sprintf("订阅列表为空"))
+			return
+		}
+
+		opmlStr, err := ToOPML(sourceList)
+
+		if err != nil {
+			_, _ = B.Send(m.Chat, fmt.Sprintf("导出失败"))
+			return
+		}
+		opmlFile := &tb.Document{File: tb.FromReader(strings.NewReader(opmlStr))}
+		opmlFile.FileName = "subscriptions.opml"
+		_, err = B.Send(m.Chat, opmlFile)
+
+		if err != nil {
+			_, _ = B.Send(m.Chat, fmt.Sprintf("导出失败"))
+			log.Println("[export]", err)
+		}
 	})
 
 	B.Handle("/sub", func(m *tb.Message) {
@@ -472,7 +470,8 @@ func makeHandle() {
 /list 查看当前订阅源
 /set 设置订阅
 /help 帮助
-/import 导入OPML文件
+/import 导入 OPML 文件
+/export 导出 OPML 文件
 详细使用方法请看：https://github.com/indes/flowerss-bot
 `
 		_, _ = B.Send(m.Chat, message)
@@ -559,14 +558,8 @@ func makeHandle() {
 						return
 					}
 					t := template.New("setting template")
-					_, _ = t.Parse(`
-订阅<b>设置</b>
-[id] {{ .sub.ID}}
-[标题] {{ .source.Title }}
-[Link] {{.source.Link}}
-[通知] {{if eq .sub.EnableNotification 0}}关闭{{else if eq .sub.EnableNotification 1}}开启{{end}}
-[Telegraph] {{if eq .sub.EnableTelegraph 0}}关闭{{else if eq .sub.EnableTelegraph 1}}开启{{end}}
-`)
+					_, _ = t.Parse(botSettingTmpl)
+
 					feedSettingKeys := [][]tb.InlineButton{}
 
 					text := new(bytes.Buffer)
@@ -575,15 +568,19 @@ func makeHandle() {
 						toggleNoticeKey.Text = "关闭通知"
 					} else {
 						toggleNoticeKey.Text = "开启通知"
-
 					}
 					if sub.EnableTelegraph == 1 {
 						toggleTelegraphKey.Text = "关闭 Telegraph 转码"
 					} else {
 						toggleTelegraphKey.Text = "开启 Telegraph 转码"
 					}
+					if source.ErrorCount >= 100 {
+						toggleEnabledKey.Text = "重启更新"
+					} else {
+						toggleEnabledKey.Text = "暂停更新"
+					}
 
-					feedSettingKeys = append(feedSettingKeys, []tb.InlineButton{toggleNoticeKey, toggleTelegraphKey})
+					feedSettingKeys = append(feedSettingKeys, []tb.InlineButton{toggleEnabledKey, toggleNoticeKey, toggleTelegraphKey})
 					_ = t.Execute(text, map[string]interface{}{"source": source, "sub": sub})
 
 					// send null message to remove old keyboard
@@ -611,10 +608,18 @@ func makeHandle() {
 
 			url, _ := B.FileURLByID(m.Document.FileID)
 			opml, err := GetOPMLByURL(url)
+
 			if err != nil {
-				_, _ = B.Send(m.Chat, "如果需要导入订阅，请发送正确的OPML文件。")
+				if err.Error() == "fetch opml file error" {
+					_, _ = B.Send(m.Chat,
+						"下载 OPML 文件失败，请检查 bot 服务器能否正常连接至 telegram 服务器或过段时间再尝试导入。")
+
+				} else {
+					_, _ = B.Send(m.Chat, "如果需要导入订阅，请发送正确的 OPML 文件。")
+				}
 				return
 			}
+
 			message, _ := B.Send(m.Chat, "处理中，请稍后。")
 			outlines, _ := opml.GetFlattenOutlines()
 			var failImportList []Outline
